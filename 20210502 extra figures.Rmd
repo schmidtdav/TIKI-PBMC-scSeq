@@ -1053,7 +1053,7 @@ rm(tCells.list,proportions,subtypes)
 <!-- ``` -->
 
 
-# comparisons flow
+# comparison to flow cytometry analyses
 
 ```{r}
 CD8_clusters = c("2","10", "7","9","6") 
@@ -1098,8 +1098,6 @@ DoHeatmap(avgExp, features = genes, size = 3,
 
 save_plot(tikiR::figpath("tCell_heatmap-TnTcmTeff.pdf"),last_plot(),base_width=4.5,base_height = 4)
 ```
-
-# Myeloid                
 
 
 ```{r outro}
