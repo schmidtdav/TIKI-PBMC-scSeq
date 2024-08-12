@@ -322,12 +322,6 @@ clonalOverlap(combined2, cloneCall="aa", method="overlap") + box$cornerLegend()
 ## TCR gamma delta chains
 
 ```{r}
-# combinedGD <- combineTCR(contig_list, 
-#                        samples = c("x", "x", "x", "x", "x","x"), # just a temp hack, fixed in next segment
-#                        ID = c("T244", "T263", "T281", "T316", "T269","T440"),
-#                        cells ="T-GD")
-## gives error!
-
 for (i in seq_along(contig_list)){
   (contig_list[[i]]$chain) %>% table %>% kable %>% print  
 }
