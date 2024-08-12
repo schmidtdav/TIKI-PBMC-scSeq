@@ -1,0 +1,1108 @@
+---
+title: "10X Genomics analysis of ITP samples"
+author: "David Schmidt, d.schmidt@sanquin.nl"
+date: "`r Sys.Date()`"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = F,message = F)
+```
+
+```{r libs}
+library(tidyverse)
+library(Seurat)
+library(future)
+library(cowplot)
+library(knitr)
+library(beepr)
+library(magrittr)
+library(ggsci)
+theme_set(theme_cowplot())
+
+```
+
+```{r load-data, eval=FALSE, include=FALSE}
+
+## import 10x filtered barcode matrices and annotate
+# add here later: annotation of TCR/BCR sequences
+
+
+g001 = Read10X("data/count_matrices/SAN-DS-G001-filtered-feature-bc-matrix/") %>%
+  CreateSeuratObject(counts=., project="T244")
+
+g001 = AddMetaData(g001,
+                      metadata=rep("chronic",length(colnames(g001))),
+                      col.name="group")
+
+g001 = AddMetaData(g001,
+                      metadata=rep("T244",length(colnames(g001))),
+                      col.name="pid")
+
+
+g002 = Read10X("data/count_matrices/SAN-DS-G002-filtered-feature-bc-matrix/") %>%
+  CreateSeuratObject(counts=., project="T263")
+
+g002 = AddMetaData(g002,
+                      metadata=rep("transient",length(colnames(g002))),
+                      col.name="group")
+
+g002 = AddMetaData(g002,
+                      metadata=rep("T263",length(colnames(g002))),
+                      col.name="pid")
+
+
+g004 = Read10X("data/count_matrices/SAN-DS-G004-filtered-feature-bc-matrix/") %>%
+  CreateSeuratObject(counts=., project="T281")
+
+g004 = AddMetaData(g004,
+                      metadata=rep("transient",length(colnames(g004))),
+                      col.name="group")
+
+g004 = AddMetaData(g004,
+                      metadata=rep("T281",length(colnames(g004))),
+                      col.name="pid")
+
+
+g005= Read10X("data/count_matrices/SAN-DS-G005-filtered-feature-bc-matrix/") %>%
+  CreateSeuratObject(counts=.,  project="T316")
+
+g005 = AddMetaData(g005,
+                      metadata=rep("T316",length(colnames(g005))),
+                      col.name="pid")
+
+g005 = AddMetaData(g005,
+                      metadata=rep("chronic",length(colnames(g005))),
+                      col.name="group")
+
+
+g006 = Read10X("data/count_matrices/SAN-DS-G006-filtered-feature-bc-matrix/") %>%
+  CreateSeuratObject(counts=.,project="T269")
+
+g006 = AddMetaData(g006,
+                      metadata=rep("T269",length(colnames(g006))),
+                      col.name="pid")
+
+g006 = AddMetaData(g006,
+                      metadata=rep("transient",length(colnames(g006))),
+                      col.name="group")
+
+
+g008 = Read10X("data/count_matrices/SAN-DS-G008-filtered-feature-bc-matrix/") %>%
+  CreateSeuratObject(counts=.,project="T440")
+
+g008 = AddMetaData(g008,
+                      metadata=rep("T440",length(colnames(g008))),
+                      col.name="pid")
+
+g008 = AddMetaData(g008,
+                      metadata=rep("transient",length(colnames(g008))),
+                      col.name="group")
+
+
+# merge
+ITPcells = merge(g001,y=c(g002,g004,g005,g006,g008), 
+             add.cell.ids =  c("T244","T263","T281","T316","T269", "T440"),
+             project="ITP")
+
+saveRDS(ITPcells,"data/processed/20200625 allCells_beforeFiltering.rds")
+rm(g001,g002,g004,g005,g006,g008,ITPcells)
+```
+
+**Data**
+
+* scRNA-seq 
+* scTCR-seq
+* scBCR-seq
+
+**Patients** 
+
+| ID |	pid |	allocation |	age |	DiseaseCourse |	FirstCR |	IVIGResponse |
+| --- | --- | --- | --- | --- | --- | --- |
+| G001 |	T244 |	IVIG |	8,0 |	chronic |	never |	NR |
+| G002 |	T263 |	Observation |	6,4 |	transient	| week1	| |
+| G004 |	T281 | IVIG |	4,4 |	CSR |	week1 |	CSR |
+| G005 |	T316 | Observation |	6,7 |	chronic |	never	| |
+| G006	| T269 | Observation |	6,0 |	transient |	month1	| |
+| G008	| T440 | IVIG |	4,5 |	CSR |	week1 |	CSR |
+
+Where CSR = transient
+
+```{r init}
+allCells = readRDS("data/processed/20200625 allCells_beforeFiltering.rds")
+table(allCells$pid) %>% kable(caption="Cells per subject before filtering")
+table(allCells$group) %>% kable(caption="Cells per group before filtering")
+```
+
+```{r filtering-mt}
+# calc mitochondrial QC metrics
+allCells[["percent.mt"]] <- PercentageFeatureSet(object = allCells, pattern = "^MT-")
+```
+
+```{r qc, fig.height=13, fig.width=7}
+# vis cell UMI / mt
+VlnPlot(object = allCells,features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 1)
+```
+
+```{r qc-2, fig.height=7, fig.width=13}
+plot1 = FeatureScatter(object = allCells, feature1 = "nCount_RNA", feature2 = "percent.mt")
+plot1 = plot1 +   geom_hline(yintercept=10)
+plot2 = FeatureScatter(object = allCells, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+plot2 = plot2 + geom_hline(yintercept=c(300,2500))
+CombinePlots(plots = list(plot1,plot2))
+rm(plot1,plot2)
+```
+
+**Filtering**
+
+* percent mtDNA < 0.1
+* `nFeature_RNA` > 300 and < 2500
+
+```{r include=F}
+# filter data and save
+allCells.filtered = subset(x = allCells, subset = nFeature_RNA > 300 & nFeature_RNA < 2500 & percent.mt < 10)
+
+saveRDS(allCells.filtered,"data/processed/20200625 allCells_filtered.rds")
+rm(allCells,allCells.filtered)
+```
+
+```{r init-2}
+allCells = readRDS("data/processed/20200625 allCells_filtered.rds")
+table(allCells$pid) %>% kable(caption="Cells per subject after filtering")
+table(allCells$group) %>% kable(caption="Cells per group after filtering")
+```
+
+**Pre-processing** 
+
+* Log normalization using `NormalizeData`. Feature counts for each cell are divided by the total counts for that cell and multiplied by the scale.factor. This is then natural-log transformed using log1p.
+* finding top 2000 variable features using `FindVariableFeatures` with selection by vst 
+* integration by CCA using first 20 dimensions
+* scaling
+
+```{r eval=FALSE, include=F}
+# normalize and find variable features
+allCells.list = SplitObject(allCells)
+allCells.list <- lapply(X = allCells.list, FUN = function(x) {
+    x <- NormalizeData(x)
+    x <- FindVariableFeatures(x, selection.method = "vst", nfeatures = 2000)
+})
+
+# integrate by CCA with 20 dimensions
+allCells.anchors <- FindIntegrationAnchors(object.list = allCells.list, dims = 1:20)
+allCells <- IntegrateData(anchorset = allCells.anchors, dims = 1:20)
+
+# scale data 
+DefaultAssay(allCells) <- "integrated" 
+allCells <- ScaleData(allCells) 
+rm(allCells.anchors,allCells.list)
+
+saveRDS(allCells,"data/processed/20200625 allCells_NormalizedIntegratedScaled.rds")
+rm(allCells)
+```
+
+**Clustering** 
+
+Elbow plot to determine optimal number of PCs
+
+```{r}
+# Determine elbow of PC plot 
+allCells = readRDS("data/processed/20200625 allCells_NormalizedIntegratedScaled.rds")
+allCells <- RunPCA(allCells, npcs = 50)
+ElbowPlot(allCells,ndims = 50)
+```
+
+* Compute and store 13 PCs (elbow) by PCA using `RunPCA` using variable features for the Assay
+* Dimensional reduction by UMAP using `RunUMAP` using PCA dimensional reduction as input, using the python package umap-learn
+* Shared Nearest Neighbor (SNN) graph, determining k-nearest neighbors of each cell (k=20) using the 13 PC dimensions as input with `FindNeighbors`
+* Identify clusters based on PCs, using the SNN, with the function `FindClusters` and a resolution of 0.8 (standard). The output is saved as `$seurat_clusters`
+
+```{r cluster, eval=FALSE, include=F}
+allCells <- RunPCA(allCells, npcs = 13) #recalc so we store only 13
+allCells <- RunUMAP(allCells, reduction = "pca", dims = 1:13)
+allCells <- FindNeighbors(allCells, reduction = "pca", dims = 1:13)
+allCells <- FindClusters(allCells)
+
+saveRDS(allCells,"data/processed/20200626 allCells_Clustered.rds")
+rm(allCells)
+```
+
+Cells per cluster
+
+### data load anchor
+
+```{r}
+allCells = readRDS("data/processed/20200626 allCells_Clustered.rds")
+table(allCells$seurat_clusters) %>% kable(caption="Cells per identified seurat cluster(all samples)")
+
+allClusters = table(allCells$seurat_clusters)  %>% as.data.frame() %>%
+  rename( Cluster = Var1)
+```
+
+**Visualise** 
+
+```{r viz, fig.width=12,fig.height=4}
+p1 = DimPlot(allCells, reduction = "umap",label = F)
+# p1 + scale_color_lancet() # doens't look good 
+p2 = DimPlot(allCells, reduction = "umap",label = F)  + theme(legend.position = "none")
+p3 = DimPlot(allCells, reduction = "umap",label = T) + theme(legend.position = "none")
+CombinePlots(plots = list(p1,p2,p3),ncol = 3)
+# save_plot(tikiR::figpath("allCells_clusters.pdf"),last_plot(),base_width=12,base_height=4)
+# save_plot(tikiR::figpath("allCells_clusters_large.pdf"),last_plot(),base_width=15,base_height=5)
+```
+
+```{r}
+# DimPlot(allCells, reduction = "umap",split.by = "group")  + theme(legend.position = "none") 
+p1 = DimPlot(allCells, reduction = "umap",group.by = "group",pt.size = 0.05) + theme_void()+ theme(legend.position = "none") 
+p2 = DimPlot(allCells, reduction = "umap",group.by = "pid",pt.size = 0.05) + theme_void()+ theme(legend.position = "none") 
+CombinePlots(plots = list(p1,p2),ncol = 2,nrow=2) 
+# save_plot(tikiR::figpath("Figure1_group-pid_noLabel.pdf"),last_plot(),base_width=3,base_height=3)
+# allCells@meta.data %>% head
+```
+
+
+```{r viz-by-group}
+DimPlot(allCells, reduction = "umap",label = F,split.by = "group")  + theme(legend.position = "none")
+# save_plot(tikiR::figpath("Cluster-group-nolegend.pdf"),last_plot(),base_width=6,base_height=3)
+DimPlot(allCells, reduction = "umap",label = F,split.by = "orig.ident",ncol=3) + theme(legend.position = "none")
+# save_plot(tikiR::figpath("Cluster-pid-nolegend.pdf"),last_plot(),base_width=9,base_height=6)
+```
+
+Identify differentially expressed genes (DEG) of clusters, using MAST for statistical testing, with the function `FindAllMarkers`. This compares each one cluster against all other clusters. 
+
+```{r identifyClusters, eval=FALSE, include=F}
+# plan("multiprocess",workers=12) # parallelization
+# # plan() 
+# Idents(allCells)
+# ?FindAllMarkers
+markers <- FindAllMarkers(object = allCells, only.pos = T,test.use = "MAST")
+beep()
+saveRDS(markers,"data/output/20200629 allCells_FindAllMarkers.rds")
+write.csv2(markers,"data/output/20200629 allCells_FindAllMarkers.csv",row.names = F)
+rm(markers)
+```
+
+```{r clusterMarkers}
+markers = readRDS("data/output/20200629 allCells_FindAllMarkers.rds")
+
+# describe markers
+markers %>% 
+  group_by(cluster) %>% 
+  filter(p_val_adj < 0.05) %>%
+  top_n(3, avg_logFC) %>% 
+  kable(caption = "Top 3 genes per cluster by log fold change")
+
+# make heatmap based on top 10 genes per cluster by log fold change & significant
+top10 <- markers %>% 
+  group_by(cluster) %>% 
+  filter(p_val_adj < 0.05) %>%
+  top_n(10, avg_logFC)
+
+# write.csv2(top10,"data/output/20200629 top10markers.csv",row.names = F)
+
+DoHeatmap(object = allCells, features = top10$gene,
+          label = TRUE,angle=0,size=3)  # adjustments for the plot
+
+# save_plot(tikiR::figpath("allCells-heatmap_top10.pdf"),last_plot(),base_width=10, base_height=12)
+```
+
+
+<!-- ```{r include=F,eval=F} -->
+<!-- avgExp <- AverageExpression(allCells, return.seurat = TRUE) -->
+<!-- saveRDS(avgExp,"data/processed/allCells_avgExp.rds") -->
+<!-- ``` -->
+
+
+
+<!-- ```{r} -->
+<!-- avgExp = readRDS("data/processed/allCells_avgExp.rds") -->
+<!-- Idents(avgExp) = fct_relevel(Idents(avgExp),"0","1","4","2","11","3","9","5","8","12","7","14","6","10","13","15","16") -->
+<!-- levels(Idents(avgExp)) -->
+
+<!-- top10 %<>% -->
+<!--   ungroup() %>% -->
+<!--   mutate(cluster = cluster %>% as.factor %>% fct_relevel(levels(Idents(avgExp)))) %>% -->
+<!--   arrange(cluster) -->
+
+<!-- # allCells = ScaleData(allCells,assay="RNA") -->
+<!-- DoHeatmap(object = avgExp, features = top10$gene,# assay = "RNA", -->
+<!--           angle=0,size=3,draw.lines = F) # adjustments for the plot -->
+
+
+<!-- # save_plot(tikiR::figpath("allCells_heatmap_top10_avgExp.pdf"),last_plot(),base_width=5, base_height=12) -->
+<!-- rm(top10,avgExp) -->
+<!-- ``` -->
+
+
+```{r}
+DefaultAssay(allCells) <- "RNA" 
+
+mod = theme_cowplot() + theme(legend.position="none",axis.line=element_blank(),axis.text.x=element_blank(),
+          axis.text.y=element_blank(),axis.ticks=element_blank(),
+          axis.title.x=element_blank(),
+          axis.title.y=element_blank())
+
+p1 = FeaturePlot(object = allCells, features = c("CD3G"))  
+# save_plot(tikiR::figpath("CD3G_example.pdf"),last_plot(),base_width=4,base_height=3)
+
+p1 = FeaturePlot(object = allCells, features = c("CD3G"))  + mod
+p2 = FeaturePlot(object = allCells, features = c("CD4")) + mod
+p3 = FeaturePlot(object = allCells, features = c("CD8A")) + mod
+p4 = FeaturePlot(object = allCells, features = c("KLRD1")) + mod
+p5 = FeaturePlot(object = allCells, features = c("CD79A")) + mod
+
+p11 = FeaturePlot(object = allCells, features = c("IFNG"))  + mod
+p12 = FeaturePlot(object = allCells, features = c("CCR7"))  + mod
+p13 = FeaturePlot(object = allCells, features = c("SELL"))  + mod
+p14 = FeaturePlot(object = allCells, features = c("FOXP3"))  + mod
+p15 = FeaturePlot(object = allCells, features = c("FCGR3A"))  + mod
+
+
+plot_grid(p1,p2,p3,p4,p5,p11,p12,p13,p14,p15,ncol=5)
+# save_plot(tikiR::figpath("subsets.pdf"),last_plot(),base_width=16,base_height=7)
+beep()
+```
+
+
+**Cluster identity**
+
+```{r}
+# gather extra data to distinguish similar clusters pairwise
+markers.to.plot <- c("CD3D", "CREM", "CCR7", "SELL", "GIMAP5", "CACYBP", "GNLY", "NKG7", "CCL5", 
+    "CD8A", "MS4A1", "CD79A", "MIR155HG", "NME1", "FCGR3A", "VMO1", "CCL2", "S100A9", "HLA-DQA1", 
+    "GPR183", "PPBP", "GNG11", "HBA2", "HBB", "TSPAN13", "IL3RA", "IGJ")
+
+DefaultAssay(allCells) <- "RNA"
+DotPlot(allCells, features = rev(markers.to.plot), 
+        cols = c("white", "#de2d26"),
+        dot.scale = 5) + RotatedAxis()
+DefaultAssay(allCells) <- "integrated"
+rm(markers.to.plot)
+```
+
+
+```{r}
+# write out the clusters so we can focus downstream analyses
+
+clusters = data.frame(cluster = 0:16, 
+           # inferred from top 3-10 genes per cluster
+           cellType = c(
+             # in sets of 5
+             "CCR7+ T #1", "CCR7+ T #2", "ITGB+ IL7R+ T", "CD8", "IL7R+ T", 
+             "NKG7+ CD8", "B naive", "Monocyte", "FCGR3A+ NK ", "ZNF683+ CD8",
+             "B memory", "LINC02446+ CD8", "XCL1+ NK", "RBC/plt", "FCGR3A+ Monocyte", 
+             # 14 could be non-classical monocyte
+             "unclear", "pDC"
+              ) 
+           ) %>%
+  mutate(cellType = cellType %>% as.character)
+clusters %>% kable
+
+
+# temporary df to match cell cluster and annotation
+x = data.frame(cluster = allCells$seurat_clusters %>% as.character %>% as.numeric)
+x %<>% left_join(clusters)
+allCells$cellType = x$cellType
+
+Idents(allCells) = "cellType"
+DimPlot(allCells, reduction = "umap",label = T) + theme(legend.position = "none")
+# save_plot(tikiR::figpath("allCells_clusters_Labelled.pdf"),last_plot(),base_width=6,base_height=6)
+
+rm(x)
+```
+
+
+
+**Cluster proportions**
+
+```{r}
+allCells.list = data.frame(cluster = allCells$seurat_clusters, group = allCells$group,pid = allCells$orig.ident)
+allCells.list$cellID = rownames(allCells.list)
+
+allCells.list %<>%
+  mutate(group = group %>% fct_relevel("transient","chronic"))
+
+# calculate proportion of cells in each cluster per patient
+proportions = allCells.list %>%
+  add_count(pid,name = "N") %>%
+  count(pid,cluster,N) %>%
+  mutate(proportion=n/N)   
+
+# add group data
+proportions %<>% 
+  left_join(allCells.list %>% count(pid,group) %>% select(pid,group),# fix to quickly access group data
+             by="pid")
+
+# proportions %<>%
+  # left_join(clusters %>% mutate(cluster = cluster %>% as.character))
+
+rm(allCells.list)
+```
+
+```{r}
+p1 = proportions %>% 
+  left_join(clusters %>% mutate(cluster = as.factor(as.character(cluster))),by="cluster")%>% 
+  left_join(allClusters %>% rename(cluster = Cluster,TotalNCluster = Freq)) %>%
+  mutate(cellType = as.factor(cellType) %>% fct_reorder(TotalNCluster)) %>%
+  filter(cluster %in% 0:8) %>%
+  ggplot(aes(cellType,proportion)) +
+  geom_text(aes(y=0.25,label=TotalNCluster,hjust=0)) +
+  geom_text(aes(y=0.3,label=cluster,hjust=0)) +
+  stat_summary(geom="errorbar",aes(group=group,col=group),fun.data = mean_se,width=0.2) + #,position=position_dodge(width=0.8)) +
+  stat_summary(geom="point",aes(group=group,col=group),fun.y = mean) +# ,position=position_dodge(width=0.8)) +#,position = "dodge") +
+  coord_flip() +
+  scale_y_continuous(position="right",breaks = c(0,0.1,0.2),labels=c(0,0.1,0.2),limits = c(0,0.3)) +
+  scale_color_lancet() +
+  theme(axis.ticks.y = element_blank(),axis.line.y=element_blank(),legend.position = "none",
+        axis.line.x=element_blank()) +
+  labs(x="",y="") 
+  
+p2 = proportions %>% 
+  left_join(clusters %>% mutate(cluster = as.factor(as.character(cluster))),by="cluster")%>% 
+  left_join(allClusters %>% rename(cluster = Cluster,TotalNCluster = Freq)) %>%
+  mutate(cellType = as.factor(cellType) %>% fct_reorder(TotalNCluster)) %>%
+  filter(cluster %in% 9:20) %>%
+  ggplot(aes(cellType,proportion)) +
+  geom_text(aes(y=0.06,label=TotalNCluster,hjust=0)) +
+  geom_text(aes(y=0.09,label=cluster,hjust=0)) +
+  stat_summary(geom="errorbar",aes(group=group,col=group),fun.data = mean_se,width=0.2) + #,position=position_dodge(width=0.8)) +
+  stat_summary(geom="point",aes(group=group,col=group),fun.y = mean) +# ,position=position_dodge(width=0.8)) +#,position = "dodge") +
+  coord_flip() +
+  scale_y_continuous(position="right",breaks = c(0,0.025,0.05),labels=c(0,0.025,0.05),limits = c(0,0.1)) +
+  scale_color_lancet() +
+  theme(axis.ticks.y = element_blank(),axis.line.y=element_blank(),legend.position = "none",
+        axis.line.x=element_blank()) +
+  labs(x="",y="") 
+  
+p2
+
+plot_grid(p1,p2,ncol=1,rel_heights = c(9/17,8/17),align = "v")
+# save_plot(tikiR::figpath("Fig1_proportions_allCells.pdf"),last_plot() ,base_width=5,base_height=6)
+
+```
+
+
+```{r graph-proportions}
+
+clusterLabels = clusters$cellType
+names(clusterLabels) = clusters$cluster
+
+# graph the proportions
+proportions %>% 
+  filter(cluster %in% 0:8) %>%
+  ggplot(aes(group,proportion,col=group)) +
+  stat_summary(geom="errorbar",width=0.2) +
+  stat_summary(geom="point") +
+  geom_point(alpha=0.5) +
+  facet_wrap(~cluster,scales = "free_x",ncol=5,
+              labeller = labeller(cluster = clusterLabels)) +
+  theme(axis.ticks.x = element_blank(),
+        axis.text.x = element_blank(),
+        legend.position = "top",
+        legend.title = element_blank()) +
+  xlab("") +
+  scale_color_lancet()
+
+# save_plot(tikiR::figpath("proportions_allCells.pdf"),last_plot() + theme(legend.position = "none"),base_width=12,base_height=6)
+
+proportions %>% 
+  filter(cluster %in% 9:16) %>%
+  ggplot(aes(group,proportion,col=group)) +
+  stat_summary(geom="errorbar",width=0.2) +
+  stat_summary(geom="point") +
+  geom_point(alpha=0.5) +
+  ylim(0,0.05) +
+  facet_wrap(~cluster,scales = "free_x",ncol=5,
+             labeller = labeller(cluster = clusterLabels)) +
+  theme(axis.ticks.x = element_blank(),
+        axis.text.x = element_blank(),
+        legend.position = "top",
+        legend.title = element_blank()) +
+  xlab("") +
+  scale_color_lancet()
+
+# save_plot(tikiR::figpath("proportions_allCells_part2.pdf"),last_plot() + theme(legend.position = "none"),base_width=12,base_height=6)
+
+
+```
+
+```{r}
+for (i in 0:16){
+  print(paste0("Results for cluster ",i))
+  test = proportions %>%
+  filter(cluster==i) %$%
+  t.test(proportion~group) 
+  
+  print(test)
+}
+
+rm(proportions,clusters,clusterLabels)
+```
+
+### Canonical marker expression heatmao
+
+
+```{r}
+allCells@active.ident
+
+allCells.filtered = subset(allCells, idents = c("CCR7+ T #1", "CCR7+ T #2", "IL7R+ T", "ITGB+ IL7R+ T",   "CD8", "LINC02446+ CD8", "ZNF683+ CD8","NKG7+ CD8", "FCGR3A+ NK ", "XCL1+ NK", "B naive",  "B memory", "Monocyte", "FCGR3A+ Monocyte","pDC","RBC/plt", "unclear"))
+
+?subset.Seurat
+avgExp <- AverageExpression(allCells.filtered, return.seurat = TRUE)
+avgExp$orig.ident
+
+
+# selected T cell  features
+# avgExp = ScaleData(avgExp)
+genes = c("CCR7","SARAF", "IL7R","FOXP3","CD8A","ITGB1","IFNG","LAG3","HLA-DRB1","CXCR3",
+       "IL2RA",
+         "KLRD1","KLRC1", "GZMA","GZMB", "FCGR3A","XCL1","XCL2", 
+           "CD19","CD79A","IGKC","JCHAIN","BANK","IGHA1", 
+           "IL3RA","CLEC4A","LILRA4","IRF7","LILRB1", "CD74","LYZ"#, 
+           #"TUBB1","PF4","SPARC" 
+           )
+
+
+
+
+# cluster re-assignment occurs, which re-assigns clustering in my_levels (assuming you have 12 clusters in total)
+clusters %<>% mutate(cellType = as.factor(cellType) %>% fct_reorder(cluster)) 
+my_levels <- levels(clusters$cellType)
+#levels(clusters$cellType) %>% dput
+my_levels = c("CCR7+ T #1", "CCR7+ T #2", "IL7R+ T", "ITGB+ IL7R+ T",   "CD8", "LINC02446+ CD8", "ZNF683+ CD8",
+"NKG7+ CD8", "FCGR3A+ NK ", "XCL1+ NK", "B naive",  "B memory", "Monocyte", "FCGR3A+ Monocyte","pDC",
+  "RBC/plt", "unclear" )
+
+# Re-level object@ident
+avgExp@active.ident <- factor(x = avgExp@active.ident, levels = my_levels)
+
+
+DoHeatmap(avgExp, features = genes, size = 3, 
+    draw.lines = F,raster = FALSE,group.bar = T)#,label = c(0:20) %>% as.character())
+
+save_plot(tikiR::figpath("Figure1_heatmap.pdf"),last_plot(),base_width=7,base_height = 6)
+```
+
+
+
+# T cells 
+
+**Clustering**
+
+```{r}
+Idents(allCells) = "seurat_clusters"
+tCells = subset(allCells,idents = c(0,1,2,3,4,5,9,11))
+tCells <- RunPCA(tCells, npcs = 50)
+ElbowPlot(tCells,ndims = 50)
+```
+
+* Compute and store 10 PCs (elbow) by PCA using `RunPCA` using variable features for the Assay
+* Dimensional reduction by UMAP using `RunUMAP` using PCA dimensional reduction as input, using the python package umap-learn
+* Shared Nearest Neighbor (SNN) graph, determining k-nearest neighbors of each cell (k=20) using the 10 PC dimensions as input with `FindNeighbors`
+* Identify clusters based on PCs, using the SNN, with the function `FindClusters` and a resolution of 0.8 (standard). The output is saved as `$seurat_clusters`
+
+```{r cluster-tCells, eval=FALSE, include=F}
+tCells <- RunPCA(tCells, npcs = 10) #recalc so we store only 10
+tCells <- RunUMAP(tCells, reduction = "pca", dims = 1:10)
+tCells <- FindNeighbors(tCells, reduction = "pca", dims = 1:10)
+tCells <- FindClusters(tCells)
+
+saveRDS(tCells,"data/processed/20200626 tCells_Clustered.rds")
+rm(tCells)
+```
+
+Cells per cluster
+
+```{r}
+tCells = readRDS("data/processed/20200626 tCells_Clustered.rds")
+table(tCells$seurat_clusters) %>% kable(caption="T cells per identified seurat cluster(all samples)")
+```
+
+**Visualise** 
+
+```{r viz-tCell, fig.width=12,fig.height=4}
+p1 = DimPlot(tCells, reduction = "umap",label = F)
+# p1 + scale_color_lancet() # doens't look good 
+p2 = DimPlot(tCells, reduction = "umap",label = F)  + theme(legend.position = "none")
+p3 = DimPlot(tCells, reduction = "umap",label = T) + theme(legend.position = "none")
+CombinePlots(plots = list(p1,p2,p3),ncol = 3)
+rm(p1,p2,p3)
+# save_plot(tikiR::figpath("tCells_clusters.pdf"),last_plot(),base_width=12,base_height=4)
+# save_plot(tikiR::figpath("tCells_clusters_large.pdf"),last_plot(),base_width=15,base_height=5)
+```
+
+```{r viz-tCell-by-group}
+DimPlot(tCells, reduction = "umap",label = F,split.by = "group")  + theme(legend.position = "none")
+# save_plot(tikiR::figpath("tCells-Cluster-group-nolegend.pdf"),last_plot(),base_width=6,base_height=3)
+DimPlot(tCells, reduction = "umap",label = F,split.by = "orig.ident",ncol=3) + theme(legend.position = "none")
+# save_plot(tikiR::figpath("tCells-Cluster-pid-nolegend.pdf"),last_plot(),base_width=9,base_height=6)
+```
+
+Identify differentially expressed genes (DEG) of clusters, using MAST for statistical testing, with the function `FindAllMarkers`. This compares each one cluster against all other clusters. 
+
+```{r identifyClusters-tCell, eval=FALSE, include=F}
+plan("multiprocess",workers=12) # parallelization
+plan() 
+# Idents(allCells)
+# ?FindAllMarkers
+markers <- FindAllMarkers(object = tCells, only.pos = T,test.use = "MAST")
+beep()
+saveRDS(markers,"data/output/20200629 tCells_FindAllMarkers.rds")
+write.csv2(markers,"data/output/20200629 tCells_FindAllMarkers.csv",row.names = F)
+rm(markers)
+```
+
+```{r clusterMarkers-tCell}
+markers = readRDS("data/output/20200629 tCells_FindAllMarkers.rds")
+
+# describe markers
+markers %>% 
+  group_by(cluster) %>% 
+  filter(p_val_adj < 0.05) %>%
+  top_n(3, avg_logFC) %>% 
+  kable(caption = "Top 3 significant genes per T cell cluster by log fold change")
+
+# make heatmap based on top 10 genes per cluster by log fold change & significant
+top10 <- markers %>% 
+  group_by(cluster) %>% 
+  filter(p_val_adj < 0.05) %>%
+  top_n(10, avg_logFC)
+
+# write.csv2(top10,"data/output/20200626 top10markers.csv",row.names = F)
+
+#Idents(tCells) = "seurat_clusters"
+# DoHeatmap(object = tCells, features = top10$gene, 
+          # label = TRUE,angle=0,size=3)  # adjustments for the plot
+
+avgExp <- AverageExpression(tCells, return.seurat = TRUE)
+Idents(avgExp) = fct_relevel(Idents(avgExp),"5","4","0","1","3","8","10","2","7","9","6")
+levels(Idents(avgExp))
+
+top10 %<>%
+  ungroup() %>%
+  mutate(cluster = cluster %>% as.factor %>% fct_relevel(levels(Idents(avgExp)))) %>%
+  arrange(cluster)
+
+avgExp = ScaleData(avgExp,assay="RNA")
+DoHeatmap(object = avgExp, features = top10$gene,# assay = "RNA",
+          angle=0,size=3,draw.lines = F) # adjustments for the plot
+
+
+save_plot(tikiR::figpath("tCells_heatmap_top10.pdf"),last_plot(),base_width=5, base_height=12)
+rm(top10)
+```
+
+**Cluster identity**
+
+```{r}
+# gather extra data to distinguish similar clusters pairwise
+markers.to.plot <- c("CD3D", "IL7R", "CCR7", "GZMA","CD8A","CD8B","CXCR3","GZMK","KLRD1","XCL1","KLRF1","EOMES","CX3CR1",
+                     "CD4","FOXP3","CTLA4","IL2RA","CXCR6","KLRB1")
+
+DefaultAssay(tCells) <- "RNA"
+DotPlot(tCells, features = rev(markers.to.plot),
+        cols = c("white", "#de2d26"),
+        dot.scale = 5) + RotatedAxis()
+DefaultAssay(tCells) <- "integrated"
+rm(markers.to.plot)
+```
+
+```{r include=F,eval=F}
+# targeted details by pairwise comparison
+
+compareIdents = function(object, ident1,ident2,annotation){
+    # Find markers that are conserved between the groups for cell identity 1 compared to cell identity 2
+    conserved.markers = FindConservedMarkers(object,ident1,ident2,grouping.var = "group") 
+    conserved.markers$gene = rownames(conserved.markers)
+    
+    # conserved.markers %<>%
+      # filter(max_pval < 0.05)
+    
+    # Select 'avg_logFC' columns indices
+    avg_logFC_columns <- grep(pattern = "avg_logFC", x = colnames(x = conserved.markers))
+    
+    # Compute mean 'avg_logFC'
+    conserved.markers$mean_avg_logFC <- rowMeans(x = conserved.markers[avg_logFC_columns])
+    
+    ## For upregulated genes
+    # Order 'conserved.markers' by 'mean_avg_logFC'
+    conserved.markers <- conserved.markers[order(conserved.markers$mean_avg_logFC, decreasing = TRUE), ]
+    
+    # Get top 10 genes
+    up = rownames(x = conserved.markers[1:10,])
+    
+    ## For downregulated genes
+    # Order 'conserved.markers' by 'mean_avg_logFC'
+    conserved.markers <- conserved.markers[order(conserved.markers$mean_avg_logFC, decreasing = FALSE), ]
+    
+    # Get top 10 genes
+    down = rownames(x = conserved.markers[1:10,])
+    
+    out = conserved.markers %>% 
+      filter(gene %in% up | gene %in% down) %>% 
+      mutate(ident.1 = ident1, 
+             ident.2 = ident2) %>%
+      select(gene, ident.1,ident.2, mean_avg_logFC,max_pval) %>%
+      arrange(desc(mean_avg_logFC))
+    
+    # log the output
+    write.csv2(out,paste0("data/output/conservedMarkers_",annotation,"_ident",ident1,"_vs",ident2,".csv"))
+    print(paste0("wrote results to data/output/conservedMarkers_",annotation,"_ident",ident1,"_vs",ident2,".csv"))
+    
+    return(out)
+}
+
+compareIdents(tCells,2,10,annotation="tCell")
+compareIdents(tCells,2,7,annotation="tCell")
+
+compareIdents(tCells,7,3,annotation="tCell")
+
+compareIdents(tCells,1,0,annotation="tCell")
+compareIdents(tCells,5,0,annotation="tCell")
+compareIdents(tCells,5,1,annotation="tCell")
+compareIdents(tCells,0,4,annotation="tCell")
+
+compareIdents(tCells,3,1,annotation="tCell")
+compareIdents(tCells,8,3,annotation="tCell")
+
+compareIdents(tCells,6,9,annotation="tCell")
+compareIdents(tCells,7,9,annotation="tCell")
+```
+
+
+<!-- ```{r} -->
+<!-- # write out the clusters so we can focus downstream analyses -->
+
+<!-- clusters = data.frame(cluster = 0:10,  -->
+<!--            # inferred from top 3-10 genes per cluster -->
+<!--            cellType = c( -->
+<!--              # in sets of 5 -->
+<!--              "0","1","CD8 LINC02446+ #1","3","T-B doublet?", -->
+<!--              "SOX4","GZMB+", "ZNF683+","8","GZMK+", -->
+<!--              "CD8 LINC02446+ #2" -->
+<!--               )  -->
+<!--            ) %>% -->
+<!--   mutate(cellType = cellType %>% as.character) -->
+<!-- clusters %>% kable -->
+
+
+<!-- # temporary df to match cell cluster and annotation -->
+<!-- x = data.frame(cluster = tCells$seurat_clusters %>% as.character %>% as.numeric) -->
+<!-- x %<>% left_join(clusters) -->
+<!-- tCells$cellType = x$cellType -->
+
+<!-- Idents(tCells) = "cellType" -->
+<!-- DimPlot(tCells, reduction = "umap",label = T) + theme(legend.position = "none") -->
+<!-- # save_plot(tikiR::figpath("allCells_clusters_Labelled.pdf"),last_plot(),base_width=6,base_height=6) -->
+
+<!-- rm(x) -->
+<!-- ``` -->
+
+```{r}
+# avgExp = AverageExpression(tCells)
+# head(avgExp[["RNA"]])
+
+# Idents(tCells)
+# Idents(tCells) = paste("cluster",Idents(tCells),sep="")
+
+avgExp <- AverageExpression(tCells, return.seurat = TRUE)
+avgExp$orig.ident
+
+
+# selected T cell  features
+# DefaultAssay(avgExp) = "integrated"
+# DefaultAssay(avgExp) = "RNA"
+# avgExp = ScaleData(avgExp)
+genes =  c("CCR7","SELL","LDHB","LRRN3",  #naive, our data (PCA)
+           "FHIT","TCF7", "FCGRT",
+           "JUN","JUNB", "FOS", "CD69", # early activation
+           "CD8A","CTSW",
+           "NKG7","CST7", "CCL5","KLRD1","GZMH","PRF1", "FCGR3A", #CD8
+           "ZNF683","ITGB1", "S100A4","ANXA1","KLF6","LGALS3","CYTOR", #activ
+           "FOXP3","IL2RA","TIGIT","CTLA4","IL32", "PLCL1","SHMT2","C21orf91" #Treg by Cuadrado Immunity 2018
+        )
+
+DoHeatmap(avgExp, features = genes, size = 3, 
+    draw.lines = F,raster = FALSE,group.bar = T)
+# save_plot(tikiR::figpath("tCells_heatMap_Cannonical.pdf"),last_plot(),base_width =5,base_height=6)
+```
+
+```{r}
+genes = c("CD8A","CCL5", "CCR7","ITGB1",
+          "IL2RA","CTLA4")
+
+FeaturePlot(tCells,features=genes,min.cutoff = "q20")
+```
+
+
+**Cluster proportions**
+
+```{r}
+tCells.list = data.frame(cluster = tCells$seurat_clusters, group = tCells$group,pid = tCells$orig.ident)
+tCells.list$cellID = rownames(tCells.list)
+
+tCells.list %<>%
+  mutate(group = group %>% fct_relevel("transient","chronic"))
+
+# calculate proportion of cells in each cluster per patient
+proportions = tCells.list %>%
+  add_count(pid,name = "N") %>%
+  count(pid,cluster,N) %>%
+  mutate(proportion=n/N)   
+
+# add group data
+proportions %<>% 
+  left_join(tCells.list %>% count(pid,group) %>% select(pid,group),# fix to quickly access group data
+             by="pid")
+
+# proportions %<>%
+  # left_join(clusters %>% mutate(cluster = cluster %>% as.character))
+
+
+```
+
+
+```{r graph-proportions-tCells}
+
+clusterLabels = 0:10 #clusters$cellType
+names(clusterLabels) = 0:10 #clusters$cluster
+
+# graph the proportions
+proportions %>% 
+  filter(cluster %in% 0:10) %>%
+  ggplot(aes(group,proportion,col=group)) +
+  stat_summary(geom="errorbar",width=0.2) +
+  stat_summary(geom="point") +
+  geom_point(alpha=0.5) +
+  facet_wrap(~cluster,scales = "free_x",ncol=5,
+              labeller = labeller(cluster = clusterLabels)) +
+  theme(axis.ticks.x = element_blank(),
+        axis.text.x = element_blank(),
+        legend.position = "top",
+        legend.title = element_blank()) +
+  xlab("") +
+  scale_color_lancet()
+
+# save_plot(tikiR::figpath("proportions_tCells.pdf"),last_plot() + theme(legend.position = "none"),base_width=12,base_height=9)
+
+```
+
+```{r}
+for (i in 0:10){
+  print(paste0("Results for cluster ",i))
+  test = proportions %>%
+  filter(cluster==i) %$%
+  t.test(proportion~group)
+  
+  print(test)
+}
+
+rm(clusters,clusterLabels)
+```
+
+**Cum proportions**
+
+CD8 vs CD4
+
+```{r}
+subtypes = proportions %>%
+  select(-proportion) %>%
+  mutate(type = case_when(
+    cluster %in% c("2","10", "7","9","6") ~ "CD8",
+    TRUE ~ "CD4"
+  )) %>%
+  group_by(pid,N,type) %>%
+  summarise(sum_type = sum(n)) %>%
+  # rename(sum_type = n) %>%
+  mutate(proportion=sum_type/N)  
+
+# add group data
+subtypes %<>% 
+  left_join(tCells.list %>% count(pid,group) %>% select(pid,group),# fix to quickly access group data
+             by="pid")
+
+subtypes %>%
+  ggplot(aes(group,proportion,col=group)) +
+  stat_summary(geom="errorbar",width=0.2) +
+  stat_summary(geom="point") +
+  geom_point(alpha=0.5) +
+  facet_wrap(~type,scales = "free_x",ncol=5)+
+              # labeller = labeller(cluster = clusterLabels)) +
+  theme(axis.ticks.x = element_blank(),
+        axis.text.x = element_blank(),
+        legend.position = "top",
+        legend.title = element_blank()) +
+  xlab("") +
+  scale_color_lancet()
+
+# save_plot(tikiR::figpath("proportions_CD8.pdf"),last_plot() + theme(legend.position = "none"),base_width=6,base_height=3)
+```
+
+CCR7+ vs negative  CD4 
+
+```{r}
+subtypes = proportions %>%
+  select(-proportion) %>%
+  filter(!(cluster %in% c("2","10", "7","9","6")))%>%
+  mutate(CCR7 = case_when(
+    cluster %in% c("3","8") ~ "CCR7-",
+    TRUE ~ "CCR7+"
+  )) %>%
+  group_by(pid,N,CCR7) %>%
+  summarise(sum_type = sum(n)) %>%
+  group_by(pid)%>%
+  mutate(N=sum(sum_type)) %>%
+  # rename(sum_type = n) %>%
+  mutate(proportion=sum_type/N)  
+
+subtypes %>%
+  group_by(pid)%>%
+  mutate(N=sum(sum_type))
+
+# add group data
+subtypes %<>% 
+  left_join(tCells.list %>% count(pid,group) %>% select(pid,group),# fix to quickly access group data
+             by="pid")
+
+subtypes %>%
+  ggplot(aes(group,proportion,col=group)) +
+  stat_summary(geom="errorbar",width=0.2) +
+  stat_summary(geom="point") +
+  geom_point(alpha=0.5) +
+  facet_wrap(~CCR7,scales = "free_x",ncol=5)+
+              # labeller = labeller(cluster = clusterLabels)) +
+  theme(axis.ticks.x = element_blank(),
+        axis.text.x = element_blank(),
+        legend.position = "top",
+        legend.title = element_blank()) +
+  xlab("") +
+  scale_color_lancet()
+
+# save_plot(tikiR::figpath("proportions_CCR7_CD4.pdf"),last_plot() + theme(legend.position = "none"),base_width=6,base_height=3)
+```
+
+CCR7+ vs negative CD8 
+
+```{r}
+subtypes = proportions %>%
+  select(-proportion) %>%
+  filter((cluster %in% c("2","10", "7","9","6")))%>%
+  mutate(CCR7 = case_when(
+    cluster %in% c("7","9","6") ~ "CCR7-",
+    TRUE ~ "CCR7+"
+  )) %>%
+  group_by(pid,N,CCR7) %>%
+  summarise(sum_type = sum(n)) %>%
+  group_by(pid)%>%
+  mutate(N=sum(sum_type)) %>%
+  mutate(proportion=sum_type/N)  
+
+# add group data
+subtypes %<>% 
+  left_join(tCells.list %>% count(pid,group) %>% select(pid,group),# fix to quickly access group data
+             by="pid")
+
+subtypes %>%
+  ggplot(aes(group,proportion,col=group)) +
+  stat_summary(geom="errorbar",width=0.2) +
+  stat_summary(geom="point") +
+  geom_point(alpha=0.5) +
+  facet_wrap(~CCR7,scales = "free_x",ncol=5)+
+              # labeller = labeller(cluster = clusterLabels)) +
+  theme(axis.ticks.x = element_blank(),
+        axis.text.x = element_blank(),
+        legend.position = "top",
+        legend.title = element_blank()) +
+  xlab("") +
+  scale_color_lancet() +
+  ylim(0.2,0.8)
+
+# save_plot(tikiR::figpath("proportions_CCR7_CD8.pdf"),last_plot() + theme(legend.position = "none"),base_width=6,base_height=3)
+```
+
+```{r}
+rm(tCells.list,proportions,subtypes)
+```
+
+
+<!-- Better define Treg -->
+
+
+<!-- ```{r} -->
+<!-- rm(tCells) -->
+<!-- allCells = readRDS("data/processed/20200626 allCells_Clustered.rds") -->
+<!-- Idents(allCells) = "seurat_clusters" -->
+<!-- tCells = subset(allCells,idents = c(0,1,2,3,4,5,9,11)) -->
+
+<!-- tCells = RunPCA(tCells, features=c("FOXP3","CTLA4","IL32","TIGIT","IL2RA","FOXP3", #Treg -->
+<!--                            "CD3D", "CD8A","CD8B","CTSW",# CD8 -->
+<!--                            "NKG7","CST7","CCL5","KLRD1","GMZH","ZNF683","ITGB1","S100A4", #activ -->
+<!--                            "IL7R","CD69","CCR7","SELL","LDHB","FHIT","LRRN3"#,#Tn -->
+<!--                           # "CXCR3","CX3CR1","EOMES" -->
+<!--                            )) -->
+
+<!-- tCells <- RunUMAP(tCells, reduction = "pca", dims = 1:10) -->
+<!-- tCells <- FindNeighbors(tCells, reduction = "pca", dims = 1:10) -->
+<!-- tCells <- FindClusters(tCells,resolution = 0.3) -->
+<!-- ``` -->
+
+<!-- ```{r} -->
+<!-- DimPlot(tCells) -->
+<!-- FeaturePlot(tCells,c("FOXP3","CTLA4","CD8A","CCR7"),min.cutoff = "q20") -->
+<!-- ``` -->
+
+
+# comparisons flow
+
+```{r}
+CD8_clusters = c("2","10", "7","9","6") 
+'%!in%' <- function(x,y)!('%in%'(x,y))
+
+Idents(tCells)
+tCells@meta.data
+
+CD4 = subset(tCells, (seurat_clusters %!in% CD8_clusters))
+CD8 = subset(tCells, (seurat_clusters %in% CD8_clusters))
+```
+
+```{r}
+Assays(tCells)
+DefaultAssay(tCells) = "RNA"
+FeatureScatter(CD4, "CD27","CCR7")
+FeatureScatter(CD4, "SELL","CCR7")
+```
+
+
+```{r}
+allCells@active.ident
+
+avgExp <- AverageExpression(CD4, return.seurat = TRUE)
+
+# selected T cell  features
+# avgExp = ScaleData(avgExp)
+genes = c("CCR7", "CD27", "SELL", "LEF1", "TCF7","GNLY","GZMB","GZMA","PRF1","SLAMF7","CX3CR1","ITGB1" )
+
+# cluster re-assignment occurs, which re-assigns clustering in my_levels (assuming you have 12 clusters in total)
+# clusters %<>% mutate(cellType = as.factor(cellType) %>% fct_reorder(cluster)) 
+my_levels <- levels(avgExp@active.ident)
+my_levels %>% dput
+my_levels = c("4", "5", "0", "1", "3","8")
+
+# Re-level object@ident
+avgExp@active.ident <- factor(x = avgExp@active.ident, levels = my_levels)
+
+
+DoHeatmap(avgExp, features = genes, size = 3, 
+    draw.lines = F,raster =     FALSE,group.bar = T)#,label = c(0:20) %>% as.character())
+
+save_plot(tikiR::figpath("tCell_heatmap-TnTcmTeff.pdf"),last_plot(),base_width=4.5,base_height = 4)
+```
+
+# Myeloid                
+
+
+```{r outro}
+devtools::session_info()
+```
+
