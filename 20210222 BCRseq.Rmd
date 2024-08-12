@@ -31,7 +31,7 @@ box::use(./box/box)
 major requirement for the attachment is matching contig cell barcodes and barcodes in the row names of the meta data of the seurat or SCE object. If these do not match, the attachment will fail. 
 
 ```{r init}
-# T cells after clustering
+# cells after clustering
 bCells = readRDS("data/processed/20200626 allCells_Clustered.rds")
 bCells = subset(bCells,idents=c(6,10))
 table(bCells$seurat_clusters) %>% kable(caption="Cells per identified seurat cluster(all samples)")
@@ -67,8 +67,6 @@ combined <- combineBCR(contig_list,
                        # ID = c("chronic", "transient", "transient", "chronic", "transient", "transient"),
                        samples = c("x", "x", "x", "x", "x","x"), # just a temp hack, fixed in next segment
                        ID = c("T244", "T263", "T281", "T316", "T269","T440")) 
-
-?combineBCR
 
 # delete x_ prefix
 names(combined) = gsub("x_","",names(combined))
